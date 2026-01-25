@@ -5,10 +5,10 @@ Trains a single PDGD ranker on all training data and evaluates on test/validatio
 import numpy as np
 import os
 from tqdm import tqdm
-from tribler_dataset import TriblerDataset
+from dart.tribler_dataset import TriblerDataset
 from fpdgd.ranker.PDGDLinearRanker import PDGDLinearRanker
 from fpdgd.client.federated_optimize import average_mrr_at_k
-from utils.evl_tool import average_ndcg_at_k
+from dart.evl_tool import average_ndcg_at_k
 import matplotlib.pyplot as plt
 
 

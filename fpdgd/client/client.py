@@ -1,9 +1,9 @@
 from typing import NamedTuple
 import numpy as np
 import copy
-from utils.evl_tool import query_ndcg_at_k
+from dart.evl_tool import query_ndcg_at_k
 from fpdgd.data.LetorDataset import LetorDataset
-from utils.dp import gamma_noise
+from dart.dp import gamma_noise
 
 # The message that each client send to the server:
 # 1.updated parameters from client
