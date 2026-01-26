@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Tribler Search CLI Tool
 
@@ -29,6 +30,7 @@ from rich import box
 from rich.text import Text
 from dart.tribler_rerank import encode_search_results
 from dart.common import FeatureScaler
+from fpdgd.ranker.PDGDLinearRanker import PDGDLinearRanker
 
 console = Console()
 
@@ -106,7 +108,7 @@ def display_result_item(result: dict, index: int, is_selected: bool = False) -> 
     console.print(f"   [dim]Infohash: {infohash}[/dim]\n")
 
 
-def interactive_results_browser(results: list[dict], query: str) -> tuple[str, dict | None]:
+def interactive_results_browser(results: list[dict], query: str) -> tuple[str, dict]:
     """
     Interactive results browser with arrow key navigation.
     Shows 5 results at a time with scrolling.
@@ -178,7 +180,7 @@ def interactive_results_browser(results: list[dict], query: str) -> tuple[str, d
             return ('quit', None)
 
 
-def get_tribler_config() -> tuple[str | None, int | None]:
+def get_tribler_config() -> tuple[str, int]:
     """
     Read the API key and port from the Tribler configuration file.
     Checks multiple possible locations.
@@ -213,7 +215,7 @@ def get_tribler_config() -> tuple[str | None, int | None]:
     return None, None
 
 
-def format_size(size_bytes: int | None) -> str:
+def format_size(size_bytes: int) -> str:
     """Format file size in human-readable format."""
     if size_bytes is None or size_bytes == 0:
         return "N/A"
@@ -265,8 +267,9 @@ def search_tribler(query: str, port: int = 51766, limit: int = 20, api_key: str 
 
     try:
         with urlopen(request, timeout=10) as response:
-            data = response.read().decode('utf-8')
-            return json.loads(data)
+            data = json.loads(response.read().decode('utf-8'))
+            data['results'] = deduplicate_results(data.get('results', []))
+            return data
     except URLError as e:
         if hasattr(e, 'code') and e.code == 401:
             print("Error: Unauthorized. Invalid or missing API key.")
@@ -439,25 +442,117 @@ def search_tribler_remote(query: str, port: int = 51766, api_key: str | None = N
     return listen_for_results(request_uuid, port, api_key, timeout)
 
 
-def rerank_results(results: list[dict], query: str, model: np.ndarray, scaler: FeatureScaler) -> list[dict]:
+def deduplicate_results(results: list[dict]) -> list[dict]:
+    """Remove duplicate results by infohash, keeping first occurrence."""
+    seen = set()
+    unique = []
+    for r in results:
+        infohash = r.get('infohash')
+        if infohash and infohash not in seen:
+            seen.add(infohash)
+            unique.append(r)
+    return unique
+
+
+def rerank_results(results: list[dict], query: str, ranker: PDGDLinearRanker, scaler: FeatureScaler) -> list[dict]:
     """
     Rerank search results using a trained PDGD model.
 
     Args:
         results: List of search result dictionaries
         query: The search query text
-        model: Model weights
+        ranker: PDGDLinearRanker instance
         scaler: FeatureScaler for normalizing features
 
     Returns:
         Reranked list of search results
     """
     feature_matrix = encode_search_results(results, query, scaler)
-    scores = np.dot(feature_matrix, model)
+    scores = ranker.get_scores(feature_matrix)
 
     scored_results = list(zip(results, scores))
     scored_results.sort(key=lambda x: x[1], reverse=True)
     return [result for result, _ in scored_results]
+
+
+def update_from_click(
+    results: list[dict],
+    query: str,
+    selected_idx: int,
+    ranker: PDGDLinearRanker,
+    scaler: FeatureScaler,
+    max_results: int = 10
+) -> None:
+    """
+    Update ranker weights from a single user click interaction.
+
+    Enables continual/online learning: when a user selects a search result,
+    that implicit feedback updates the ranker in real-time. The ranker is
+    modified in-place; caller is responsible for persisting weights on exit.
+
+    Args:
+        results: List of search result dicts from Tribler API
+        query: The search query string
+        selected_idx: Index of the user-selected result (0-based)
+        ranker: PDGDLinearRanker instance (modified in-place)
+        scaler: Fitted FeatureScaler for normalizing features
+        max_results: Max results to consider (PDGD internally uses 10)
+    """
+    if not results or selected_idx < 0 or selected_idx >= len(results):
+        return
+
+    # PDGD expects at most 10 results; skip if click is beyond that
+    if selected_idx >= max_results:
+        return
+
+    # Truncate to max_results
+    results = results[:max_results]
+    n_results = len(results)
+
+    feature_matrix = encode_search_results(results, query, scaler)
+    scores = ranker.get_scores(feature_matrix)
+
+    # Compress score range to prevent numerical underflow in PDGD
+    # PDGD normalizes max to 18, so we match that for consistency
+    score_min, score_max = scores.min(), scores.max()
+    score_range = score_max - score_min
+    if score_range > 18:
+        scores = (scores - score_min) / score_range * 18
+
+    # Ranking array: indices in display order
+    ranking = np.arange(n_results, dtype=np.int32)
+
+    # Click labels: 1 for selected, 0 for others
+    click_labels = np.zeros(n_results, dtype=np.float64)
+    click_labels[selected_idx] = 1.0
+
+    weights_before = ranker.get_current_weights().copy()
+
+    # Debug: check what we're passing to PDGD
+    # print(f"\n[DEBUG] n_results: {n_results}, selected_idx: {selected_idx}")
+    # print(f"[DEBUG] click_labels: {click_labels}")
+    # print(f"[DEBUG] ranking: {ranking}")
+    # print(f"[DEBUG] scores range: {scores.min():.2f} to {scores.max():.2f}")
+
+    gradient = ranker.update_to_clicks(
+        click_labels,
+        ranking,
+        scores,
+        feature_matrix,
+        return_gradients=True
+    )
+
+    ranker.update_to_gradients(gradient)
+
+    weights_after = ranker.get_current_weights()
+    scores_after = ranker.get_scores(feature_matrix)
+
+    # Debug output
+    print(f"\n[DEBUG] Click on position {selected_idx}")
+    print(f"[DEBUG] Gradient norm: {np.linalg.norm(gradient):.6f}, max: {np.max(np.abs(gradient)):.6f}")
+    print(f"[DEBUG] Weight change norm: {np.linalg.norm(weights_after - weights_before):.6f}")
+    print(f"[DEBUG] Score of clicked item: {scores[selected_idx]:.4f} -> {scores_after[selected_idx]:.4f}")
+    print(f"[DEBUG] Score of top item: {scores[0]:.4f} -> {scores_after[0]:.4f}")
 
 
 def display_results(data: dict, query: str) -> None:
@@ -592,9 +687,23 @@ def main():
         console.print("[yellow]Warning:[/yellow] No API key found. If authentication is required, provide --api-key")
         console.print("[dim]Checked locations: ~/.Tribler/8.0/, ~/.tribler_cli/, ~/.Tribler/git/[/dim]")
         console.print()
-    
-    model = np.load("models/pdgd_ranker.npy")
-    scaler = FeatureScaler.load("tribler_data/feature_scaler.json")
+
+    # Load model and scaler
+    model_path = "models/pdgd_ranker.npy"
+    scaler_path = "tribler_data/feature_scaler.json"
+
+    weights = np.load(model_path)
+    scaler = FeatureScaler.load(scaler_path)
+
+    # Create ranker with loaded weights (low LR for online updates)
+    ranker = PDGDLinearRanker(
+        num_features=weights.shape[0],
+        learning_rate=0.1,
+        tau=1.0,
+        learning_rate_decay=1.0,
+        random_initial=False
+    )
+    ranker.assign_weights(weights)
 
     # Interactive search loop
     console.print(Panel.fit(
@@ -639,9 +748,10 @@ def main():
                 data = search_tribler(query, port, args.limit, api_key)
                 results = data.get('results', [])
 
+        args.ltr = True
         if args.ltr and results:
             console.print("[cyan]Reranking results...[/cyan]")
-            results = rerank_results(results, query, model, scaler)
+            results = rerank_results(results, query, ranker, scaler)
 
         # Enter interactive results browser
         if results:
@@ -652,21 +762,25 @@ def main():
                     console.clear()
                     selected_name = selected_result.get('name', 'Unknown')
 
+                    # Update model from click feedback
+                    selected_idx = results.index(selected_result)
+                    update_from_click(results, query, selected_idx, ranker, scaler)
+
                     # Build panel content using Text to avoid markup issues
                     panel_content = Text()
                     panel_content.append("Selected: ", style="green")
                     panel_content.append(selected_name)
                     panel_content.append("\n")
                     panel_content.append(f"Infohash: {selected_result.get('infohash', 'N/A')}", style="dim")
+                    panel_content.append("\n")
+                    panel_content.append("Model updated from feedback", style="dim cyan")
 
                     console.print(Panel(
                         panel_content,
                         border_style="green",
                         box=box.ROUNDED
                     ))
-                    console.print("\n[dim]Press Enter to continue...[/dim]")
-                    input()
-                    # Continue to new query
+                    console.print()
                 elif action == 'new_query':
                     # Continue to next iteration
                     continue
@@ -680,6 +794,21 @@ def main():
             console.print(f"[yellow]No results found for: '{query}'[/yellow]")
             console.print("[dim]Press Enter to try a new search...[/dim]")
             input()
+
+    # Prompt to save model on exit
+    try:
+        save = Prompt.ask(
+            "[cyan]Save model updates?[/cyan]",
+            choices=["y", "n"],
+            default="y"
+        )
+        if save == "y":
+            np.save(model_path, ranker.get_current_weights())
+            console.print("[dim]Model saved.[/dim]")
+        else:
+            console.print("[dim]Model not saved.[/dim]")
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Model not saved.[/dim]")
 
 
 if __name__ == "__main__":

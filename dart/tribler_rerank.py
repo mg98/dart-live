@@ -18,7 +18,7 @@ def encode_search_results(
     results: list[dict],
     query: str,
     scaler: FeatureScaler,
-    current_time: float | None = None
+    current_time = None
 ) -> np.ndarray:
     """
     Encode search results into feature matrix for reranking.

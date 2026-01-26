@@ -2,5 +2,6 @@
 *.pyo
 **/.DS_Store
 **/__pycache__
+.vscode
 .idea/
 tribler_data/

@@ -30,9 +30,7 @@ class PDGDLinearRanker(LinearRanker):
         k = np.minimum(10, n_docs)
 
         doc_scores = self.get_scores(feature_matrix) # scores for all docs by linear ranker
-
         doc_scores += 18 - np.amax(doc_scores)
-
         ranking = self._recursive_choice(np.copy(doc_scores),
                                          np.array([], dtype=np.int32),
                                          k,

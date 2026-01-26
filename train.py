@@ -1,6 +1,6 @@
 """
 Local PDGD training script (non-federated) for Tribler dataset
-Trains a single PDGD ranker on all training data and evaluates on test/validation data
+Trains a single PDGD ranker on all training data and evaluates on test/validation data.
 """
 import numpy as np
 import os
@@ -9,7 +9,6 @@ from dart.tribler_dataset import TriblerDataset
 from fpdgd.ranker.PDGDLinearRanker import PDGDLinearRanker
 from fpdgd.client.federated_optimize import average_mrr_at_k
 from dart.evl_tool import average_ndcg_at_k
-import matplotlib.pyplot as plt
 
 
 def get_num_features(data_path: str) -> int:
@@ -126,7 +125,7 @@ def main():
     # Configuration
     lr = 0.1
     tau = 1.0
-    batch_size = 100
+    batch_size = 1
     epochs = 5
     eval_k = 20
 
