@@ -6,3 +6,4 @@ tqdm
 matplotlib
 rich
 rank-bm25
+readchar

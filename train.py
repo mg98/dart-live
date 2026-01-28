@@ -9,18 +9,8 @@ from dart.tribler_dataset import TriblerDataset
 from fpdgd.ranker.PDGDLinearRanker import PDGDLinearRanker
 from fpdgd.client.federated_optimize import average_mrr_at_k
 from dart.evl_tool import average_ndcg_at_k
-
-
-def get_num_features(data_path: str) -> int:
-    """Extract number of features from first line of LETOR-format data file."""
-    with open(data_path, 'r') as f:
-        first_line = f.readline()
-    max_feature_idx = max(
-        int(part.split(':')[0])
-        for part in first_line.split()
-        if ':' in part and part.split(':')[0].isdigit()
-    )
-    return max_feature_idx + 1
+from dart.common import get_num_features
+from dart.evl_tool import compute_mrr
 
 
 def train_local_pdgd(ranker: PDGDLinearRanker,
@@ -79,14 +69,6 @@ def train_local_pdgd(ranker: PDGDLinearRanker,
 
         avg_mrr = np.mean(epoch_mrrs)
         print(f"Epoch {epoch + 1} - Training MRR: {avg_mrr:.4f}")
-
-
-def compute_mrr(relevance_labels: np.ndarray, k: int = 10000) -> float:
-    """Compute MRR@k from relevance labels"""
-    for i in range(min(k, len(relevance_labels))):
-        if relevance_labels[i] > 0:
-            return 1.0 / (i + 1)
-    return 0.0
 
 
 def evaluate(ranker: PDGDLinearRanker,

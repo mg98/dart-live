@@ -903,3 +903,14 @@ def calculate_trigram_diversity(text):
     # 1.0 = Highly complex/unique
     # 0.5 or lower = Highly repetitive (Spam)
     return unique_trigrams / len(trigrams)
+
+def get_num_features(data_path: str) -> int:
+    """Extract number of features from first line of LETOR-format data file."""
+    with open(data_path, 'r') as f:
+        first_line = f.readline()
+    max_feature_idx = max(
+        int(part.split(':')[0])
+        for part in first_line.split()
+        if ':' in part and part.split(':')[0].isdigit()
+    )
+    return max_feature_idx + 1

@@ -24,7 +24,7 @@ def encode_search_results(
     Encode search results into feature matrix for reranking.
 
     Uses the same feature extraction logic as LTRDatasetMaker.process_row
-    to produce 40 normalized features compatible with the trained model.
+    to produce normalized features compatible with the trained model.
 
     Args:
         results: List of search result dicts with keys:
@@ -34,7 +34,7 @@ def encode_search_results(
         current_time: Current timestamp (defaults to time.time())
 
     Returns:
-        NumPy array of shape (n_results, 40) containing normalized feature vectors
+        NumPy array of shape (n_results, N) containing normalized feature vectors
     """
     if not results:
         return np.array([])

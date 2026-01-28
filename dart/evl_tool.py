@@ -1,14 +1,12 @@
 import numpy as np
 from scipy import stats
 
-def online_mrr_at_k(clicks, k):
-    reciprocal_rank = 0.0
-    n_docs = len(clicks)
-    for i in range(min(k, n_docs)):
-        if clicks[i] > 0:
-            reciprocal_rank = 1.0 / (1.0 + i)
-            break
-    return reciprocal_rank
+def compute_mrr(relevance_labels: np.ndarray, k: int = 10000) -> float:
+    """Compute MRR@k from relevance labels"""
+    for i in range(min(k, len(relevance_labels))):
+        if relevance_labels[i] > 0:
+            return 1.0 / (i + 1)
+    return 0.0
 
 def query_ndcg_at_k(dataset, result_list, query, k):
 

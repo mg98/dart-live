@@ -301,3 +301,54 @@ class PDGDLinearRanker(LinearRanker):
 
     def set_tau(self, tau):
         self.tau = tau
+
+    def update_from_click(self, feature_matrix: np.ndarray, selected_idx: int, max_results: int = 10) -> bool:
+        """
+        Update ranker weights from a single user click interaction.
+
+        Enables continual/online learning: when a user selects an item from a ranked list,
+        that implicit feedback updates the ranker in real-time.
+
+        Args:
+            feature_matrix: Feature matrix for the result set (n_results x n_features)
+            selected_idx: Index of the user-selected result (0-based)
+            max_results: Max results to consider (PDGD internally uses 10)
+
+        Returns:
+            True if update was applied, False if skipped (invalid input or click beyond max_results)
+        """
+        n_results = feature_matrix.shape[0]
+
+        if n_results == 0 or selected_idx < 0 or selected_idx >= n_results:
+            return False
+
+        if selected_idx >= max_results:
+            return False
+
+        feature_matrix = feature_matrix[:max_results]
+        n_results = feature_matrix.shape[0]
+
+        scores = self.get_scores(feature_matrix)
+
+        # Compress score range to prevent numerical underflow in PDGD
+        # PDGD normalizes max to 18, so we match that for consistency
+        score_min, score_max = scores.min(), scores.max()
+        score_range = score_max - score_min
+        if score_range > 18:
+            scores = (scores - score_min) / score_range * 18
+
+        ranking = np.arange(n_results, dtype=np.int32)
+
+        click_labels = np.zeros(n_results, dtype=np.float64)
+        click_labels[selected_idx] = 1.0
+
+        gradient = self.update_to_clicks(
+            click_labels,
+            ranking,
+            scores,
+            feature_matrix,
+            return_gradients=True
+        )
+
+        self.update_to_gradients(gradient)
+        return True

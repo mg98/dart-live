@@ -21,8 +21,8 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-import termios
-import tty
+
+import readchar
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.panel import Panel
@@ -35,38 +35,11 @@ from fpdgd.ranker.PDGDLinearRanker import PDGDLinearRanker
 console = Console()
 
 def getch():
-    """Get a single character from stdin without echo."""
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
-
-        # Handle Ctrl+C
-        if ch == '\x03':
-            raise KeyboardInterrupt
-
-        # Handle arrow keys (escape sequences)
-        if ch == '\x1b':
-            # Set stdin to non-blocking mode to check for more characters
-            old_flags = termios.tcgetattr(fd)
-            attrs = termios.tcgetattr(fd)
-            attrs[6][termios.VMIN] = 0  # Minimum bytes to read
-            attrs[6][termios.VTIME] = 1  # Timeout in deciseconds (0.1s)
-            termios.tcsetattr(fd, termios.TCSANOW, attrs)
-
-            # Try to read the next 2 characters (for arrow keys like [A, [B)
-            next_chars = sys.stdin.read(2)
-
-            # Restore original terminal settings
-            termios.tcsetattr(fd, termios.TCSANOW, old_flags)
-
-            if next_chars:
-                ch += next_chars
-            # else: just ESC key pressed
-        return ch
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    """Get a single key from stdin without echo. Cross-platform."""
+    key = readchar.readkey()
+    if key == '\x03':
+        raise KeyboardInterrupt
+    return key
 
 
 def display_result_item(result: dict, index: int, is_selected: bool = False) -> None:
@@ -168,15 +141,15 @@ def interactive_results_browser(results: list[dict], query: str) -> tuple[str, d
         # Get user input
         key = getch()
 
-        if key == '\x1b[A':  # Up arrow
+        if key == readchar.key.UP:
             selected_idx = max(0, selected_idx - 1)
-        elif key == '\x1b[B':  # Down arrow
+        elif key == readchar.key.DOWN:
             selected_idx = min(len(results) - 1, selected_idx + 1)
-        elif key == '\r' or key == '\n':  # Enter
+        elif key in (readchar.key.ENTER, '\r', '\n'):
             return ('select', results[selected_idx])
-        elif key.lower() == 'q':  # Q for new query
+        elif key.lower() == 'q':
             return ('new_query', None)
-        elif key == '\x1b':  # ESC
+        elif key == readchar.key.ESC:
             return ('quit', None)
 
 
@@ -486,10 +459,6 @@ def update_from_click(
     """
     Update ranker weights from a single user click interaction.
 
-    Enables continual/online learning: when a user selects a search result,
-    that implicit feedback updates the ranker in real-time. The ranker is
-    modified in-place; caller is responsible for persisting weights on exit.
-
     Args:
         results: List of search result dicts from Tribler API
         query: The search query string
@@ -498,61 +467,11 @@ def update_from_click(
         scaler: Fitted FeatureScaler for normalizing features
         max_results: Max results to consider (PDGD internally uses 10)
     """
-    if not results or selected_idx < 0 or selected_idx >= len(results):
+    if not results:
         return
 
-    # PDGD expects at most 10 results; skip if click is beyond that
-    if selected_idx >= max_results:
-        return
-
-    # Truncate to max_results
-    results = results[:max_results]
-    n_results = len(results)
-
-    feature_matrix = encode_search_results(results, query, scaler)
-    scores = ranker.get_scores(feature_matrix)
-
-    # Compress score range to prevent numerical underflow in PDGD
-    # PDGD normalizes max to 18, so we match that for consistency
-    score_min, score_max = scores.min(), scores.max()
-    score_range = score_max - score_min
-    if score_range > 18:
-        scores = (scores - score_min) / score_range * 18
-
-    # Ranking array: indices in display order
-    ranking = np.arange(n_results, dtype=np.int32)
-
-    # Click labels: 1 for selected, 0 for others
-    click_labels = np.zeros(n_results, dtype=np.float64)
-    click_labels[selected_idx] = 1.0
-
-    weights_before = ranker.get_current_weights().copy()
-
-    # Debug: check what we're passing to PDGD
-    # print(f"\n[DEBUG] n_results: {n_results}, selected_idx: {selected_idx}")
-    # print(f"[DEBUG] click_labels: {click_labels}")
-    # print(f"[DEBUG] ranking: {ranking}")
-    # print(f"[DEBUG] scores range: {scores.min():.2f} to {scores.max():.2f}")
-
-    gradient = ranker.update_to_clicks(
-        click_labels,
-        ranking,
-        scores,
-        feature_matrix,
-        return_gradients=True
-    )
-
-    ranker.update_to_gradients(gradient)
-
-    weights_after = ranker.get_current_weights()
-    scores_after = ranker.get_scores(feature_matrix)
-
-    # Debug output
-    print(f"\n[DEBUG] Click on position {selected_idx}")
-    print(f"[DEBUG] Gradient norm: {np.linalg.norm(gradient):.6f}, max: {np.max(np.abs(gradient)):.6f}")
-    print(f"[DEBUG] Weight change norm: {np.linalg.norm(weights_after - weights_before):.6f}")
-    print(f"[DEBUG] Score of clicked item: {scores[selected_idx]:.4f} -> {scores_after[selected_idx]:.4f}")
-    print(f"[DEBUG] Score of top item: {scores[0]:.4f} -> {scores_after[0]:.4f}")
+    feature_matrix = encode_search_results(results[:max_results], query, scaler)
+    ranker.update_from_click(feature_matrix, selected_idx, max_results)
 
 
 def display_results(data: dict, query: str) -> None:
@@ -695,7 +614,7 @@ def main():
     weights = np.load(model_path)
     scaler = FeatureScaler.load(scaler_path)
 
-    # Create ranker with loaded weights (low LR for online updates)
+    # Create ranker with loaded weights
     ranker = PDGDLinearRanker(
         num_features=weights.shape[0],
         learning_rate=0.1,
@@ -800,7 +719,7 @@ def main():
         save = Prompt.ask(
             "[cyan]Save model updates?[/cyan]",
             choices=["y", "n"],
-            default="y"
+            default="n"
         )
         if save == "y":
             np.save(model_path, ranker.get_current_weights())
