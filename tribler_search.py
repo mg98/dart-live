@@ -34,13 +34,6 @@ from fpdgd.ranker.PDGDLinearRanker import PDGDLinearRanker
 
 console = Console()
 
-def getch():
-    """Get a single key from stdin without echo. Cross-platform."""
-    key = readchar.readkey()
-    if key == '\x03':
-        raise KeyboardInterrupt
-    return key
-
 
 def display_result_item(result: dict, index: int, is_selected: bool = False) -> None:
     """Display a single result with color formatting."""
@@ -139,9 +132,10 @@ def interactive_results_browser(results: list[dict], query: str) -> tuple[str, d
         ))
 
         # Get user input
-        key = getch()
-
-        if key == readchar.key.UP:
+        key = readchar.readkey()
+        if key == '\x03':
+            raise KeyboardInterrupt
+        elif key == readchar.key.UP:
             selected_idx = max(0, selected_idx - 1)
         elif key == readchar.key.DOWN:
             selected_idx = min(len(results) - 1, selected_idx + 1)
