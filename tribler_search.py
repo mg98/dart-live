@@ -15,6 +15,7 @@ Usage:
 import argparse
 import json
 import sys
+import os
 import time
 import numpy as np
 from pathlib import Path
@@ -155,7 +156,17 @@ def get_tribler_config() -> tuple[str, int]:
     Returns:
         Tuple of (api_key, port) or (None, None) if not found
     """
-    config_path = Path.home() / ".Tribler" / "8.0" / "configuration.json"
+    if os.name == 'nt':
+        # On Windows check APPDATA
+        appdata = os.environ.get('APPDATA')
+        if appdata:
+            config_path = Path(appdata) / "Tribler" / "8.0" / "configuration.json"
+        else:
+            config_path = Path.home() / "AppData" / "Roaming" / "Tribler" / "8.0" / "configuration.json"
+    else:
+        # On Linux/macOS check home
+        config_path = Path.home() / ".Tribler" / "8.0" / "configuration.json"
+
     if not config_path.exists():
         raise Exception(f"config file not found: {config_path}")
 
