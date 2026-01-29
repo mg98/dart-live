@@ -160,9 +160,9 @@ def get_tribler_config() -> tuple[str, int]:
         # On Windows check APPDATA
         appdata = os.environ.get('APPDATA')
         if appdata:
-            config_path = Path(appdata) / "Tribler" / "8.0" / "configuration.json"
+            config_path = Path(appdata) / ".Tribler" / "8.0" / "configuration.json"
         else:
-            config_path = Path.home() / "AppData" / "Roaming" / "Tribler" / "8.0" / "configuration.json"
+            config_path = Path.home() / "AppData" / "Roaming" / ".Tribler" / "8.0" / "configuration.json"
     else:
         # On Linux/macOS check home
         config_path = Path.home() / ".Tribler" / "8.0" / "configuration.json"
