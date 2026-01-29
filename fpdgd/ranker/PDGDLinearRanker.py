@@ -349,6 +349,5 @@ class PDGDLinearRanker(LinearRanker):
             feature_matrix,
             return_gradients=True
         )
-
         self.update_to_gradients(gradient)
         return True

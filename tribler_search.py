@@ -159,10 +159,7 @@ def get_tribler_config() -> tuple[str, int]:
     if os.name == 'nt':
         # On Windows check APPDATA
         appdata = os.environ.get('APPDATA')
-        if appdata:
-            config_path = Path(appdata) / ".Tribler" / "8.0" / "configuration.json"
-        else:
-            config_path = Path.home() / "AppData" / "Roaming" / ".Tribler" / "8.0" / "configuration.json"
+        config_path = Path(appdata) / ".Tribler" / "8.0" / "configuration.json"
     else:
         # On Linux/macOS check home
         config_path = Path.home() / ".Tribler" / "8.0" / "configuration.json"
@@ -172,10 +169,9 @@ def get_tribler_config() -> tuple[str, int]:
 
     with open(config_path) as f:
         config = json.load(f)
-        api_config = config.get("api", {})
+        api_config = config.get("api")
         api_key = api_config.get("key")
-        port = api_config.get("http_port_running") or api_config.get("http_port", 51766)
-        print(port)
+        port = api_config.get("http_port_running")
 
         return api_key, port
 
@@ -547,7 +543,7 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        help="Tribler REST API port (default: 51766)"
+        help="Tribler REST API port"
     )
 
     parser.add_argument(
@@ -588,7 +584,7 @@ def main():
             api_key = detected_key
         if not port:
             port = detected_port
-
+            
     # Load model and scaler
     model_path = "models/pdgd_ranker.npy"
     scaler_path = "tribler_data/feature_scaler.json"

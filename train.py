@@ -108,7 +108,7 @@ def main():
     lr = 0.1
     tau = 1.0
     batch_size = 1
-    epochs = 5
+    epochs = 1
     eval_k = 20
 
     # Data paths
