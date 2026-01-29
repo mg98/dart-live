@@ -155,31 +155,18 @@ def get_tribler_config() -> tuple[str, int]:
     Returns:
         Tuple of (api_key, port) or (None, None) if not found
     """
-    # Check multiple possible Tribler configuration locations
-    possible_paths = [
-        Path.home() / ".Tribler" / "8.0" / "configuration.json",      # GUI version
-        Path.home() / ".tribler_cli" / "configuration.json",          # CLI version
-        Path.home() / ".Tribler" / "git" / "configuration.json",      # Dev version
-        Path.home() / ".Tribler" / "configuration.json",              # Alternative
-    ]
+    config_path = Path.home() / ".Tribler" / "8.0" / "configuration.json"
+    if not config_path.exists():
+        raise Exception(f"config file not found: {config_path}")
 
-    for config_path in possible_paths:
-        if not config_path.exists():
-            continue
+    with open(config_path) as f:
+        config = json.load(f)
+        api_config = config.get("api", {})
+        api_key = api_config.get("key")
+        port = api_config.get("http_port_running") or api_config.get("http_port", 51766)
+        print(port)
 
-        try:
-            with open(config_path) as f:
-                config = json.load(f)
-                api_config = config.get("api", {})
-                api_key = api_config.get("key")
-                port = api_config.get("http_port_running") or api_config.get("http_port", 51766)
-
-                if api_key:
-                    return api_key, port
-        except Exception:
-            continue
-
-    return None, None
+        return api_key, port
 
 
 def format_size(size_bytes: int) -> str:
@@ -585,21 +572,12 @@ def main():
     port = args.port
 
     # If not provided via command line, try to auto-detect
-    if not api_key or port == 51766:  # 51766 is the default, might not be actual
+    if not api_key or not port:
         detected_key, detected_port = get_tribler_config()
-
-        if not api_key and detected_key:
+        if not api_key:
             api_key = detected_key
-            console.print(f"[dim]Auto-detected API key from configuration[/dim]",)
-
-        if port == 51766 and detected_port:
+        if not port:
             port = detected_port
-            console.print(f"[dim]Auto-detected Tribler running on port {port}[/dim]")
-
-    if not api_key:
-        console.print("[yellow]Warning:[/yellow] No API key found. If authentication is required, provide --api-key")
-        console.print("[dim]Checked locations: ~/.Tribler/8.0/, ~/.tribler_cli/, ~/.Tribler/git/[/dim]")
-        console.print()
 
     # Load model and scaler
     model_path = "models/pdgd_ranker.npy"
