@@ -547,7 +547,6 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=51766,
         help="Tribler REST API port (default: 51766)"
     )
 
