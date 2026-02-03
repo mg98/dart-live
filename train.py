@@ -46,9 +46,12 @@ def train_local_pdgd(ranker: PDGDLinearRanker,
 
                 # Get relevance labels (simulating clicks)
                 ranking_relevance = np.zeros(ranking_result.shape[0])
+                last_exam = None
                 for j, docid in enumerate(ranking_result):
                     relevance = train_ds.get_relevance_label_by_query_and_docid(qid, docid)
                     ranking_relevance[j] = relevance
+                    if relevance > 0 and last_exam == None:
+                        last_exam = j + 1
 
                 # Compute online metrics
                 mrr = compute_mrr(ranking_relevance)
@@ -61,7 +64,8 @@ def train_local_pdgd(ranker: PDGDLinearRanker,
                     ranking_result,
                     scores,
                     feature_matrix,
-                    return_gradients=True
+                    last_exam=last_exam,
+                    return_gradients=True,
                 )
                 ranker.update_to_gradients(gradient)
 
