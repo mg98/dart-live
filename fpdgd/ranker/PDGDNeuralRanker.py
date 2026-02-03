@@ -1,59 +1,48 @@
-from fpdgd.ranker.LinearRanker import LinearRanker
+from fpdgd.ranker.NeuralRanker import NeuralRanker
 import numpy as np
 
 
-class PDGDLinearRanker(LinearRanker):
-    def __init__(self, num_features, learning_rate, tau=1, learning_rate_decay=1, random_initial=True,
+class PDGDNeuralRanker(NeuralRanker):
+    def __init__(self, num_features, learning_rate, tau=1, learning_rate_decay=1,
                  gradient_clip_norm: float = 0):
-        super().__init__(num_features, learning_rate, learning_rate_decay, random_initial)
+        super().__init__(num_features, learning_rate, learning_rate_decay)
         self.tau = tau
         self.gradient_clip_norm = gradient_clip_norm
 
-        # clipping and DP noise
         self.sensitivity = 0
         self.enable_noise = False
 
-    def enable_noise_and_set_sensitivity(self, enable, sensitivty):
-        self.sensitivity = sensitivty
+    def enable_noise_and_set_sensitivity(self, enable, sensitivity):
+        self.sensitivity = sensitivity
         self.enable_noise = enable
 
     def get_query_result_list(self, dataset, query, random=False):
-        """
-        Step 5 in [Algorithm 1 Pairwise Differentiable Gradient Descent (PDGD).]
-        :param dataset:
-        :param query:
-        :param random:
-        :return:
-        """
         feature_matrix = dataset.get_all_features_by_query(query)
         docid_list = np.array(dataset.get_candidate_docids_by_query(query))
         n_docs = docid_list.shape[0]
 
         k = np.minimum(10, n_docs)
 
-        doc_scores = self.get_scores(feature_matrix) # scores for all docs by linear ranker
+        doc_scores = self.get_scores(feature_matrix)
         doc_scores += 18 - np.amax(doc_scores)
         ranking = self._recursive_choice(np.copy(doc_scores),
                                          np.array([], dtype=np.int32),
                                          k,
-                                         random) # random = False. # Generate ranking list by ranking scores (from ranking function) and Plackett-Luce (PL) model distribution
+                                         random)
 
         return ranking, doc_scores
 
     def _recursive_choice(self, scores, incomplete_ranking, k_left, random):
-
         n_docs = scores.shape[0]
 
         scores[incomplete_ranking] = np.amin(scores)
-
         scores += 18 - np.amax(scores)
-        exp_scores = np.exp(scores/self.tau)
+        exp_scores = np.exp(scores / self.tau)
 
         exp_scores[incomplete_ranking] = 0
         probs = exp_scores / np.sum(exp_scores)
 
         safe_n = np.sum(probs > 10 ** (-4) / n_docs)
-
         safe_k = np.minimum(safe_n, k_left)
 
         if random:
@@ -75,9 +64,7 @@ class PDGDLinearRanker(LinearRanker):
             return ranking
 
     def update_to_clicks(self, click_label, ranking, doc_scores, feature_matrix, last_exam=None, return_gradients=False):
-
         if last_exam is None:
-
             clicks = np.array(click_label == 1)
 
             n_docs = ranking.shape[0]
@@ -91,9 +78,7 @@ class PDGDLinearRanker(LinearRanker):
 
             neg_ind = np.where(np.logical_xor(clicks, included))[0]
             pos_ind = np.where(clicks)[0]
-
         else:
-
             if last_exam == 10:
                 neg_ind = np.where(click_label[:last_exam] == 0)[0]
                 pos_ind = np.where(click_label[:last_exam] == 1)[0]
@@ -101,14 +86,13 @@ class PDGDLinearRanker(LinearRanker):
                 neg_ind = np.where(click_label[:last_exam + 1] == 0)[0]
                 pos_ind = np.where(click_label[:last_exam] == 1)[0]
 
-
         n_pos = pos_ind.shape[0]
         n_neg = neg_ind.shape[0]
         n_pairs = n_pos * n_neg
 
         if n_pairs == 0:
             if return_gradients:
-                return np.zeros(feature_matrix.shape[1])
+                return None
             return
 
         pos_r_ind = ranking[pos_ind]
@@ -140,66 +124,75 @@ class PDGDLinearRanker(LinearRanker):
         all_ind = np.concatenate([pos_r_ind, neg_r_ind])
 
         if return_gradients:
-            return self.get_update_gradients(all_ind, all_w, feature_matrix)
+            return (all_ind, all_w, feature_matrix)
         else:
             self._update_to_documents(all_ind, all_w, feature_matrix)
 
-    def _clip_gradient(self, gradient: np.ndarray) -> np.ndarray:
+    def _clip_gradient(self, dW1, db1, dW2, db2):
         if self.gradient_clip_norm > 0:
-            grad_norm = np.linalg.norm(gradient)
+            flat = np.concatenate([dW1.ravel(), db1, dW2.ravel(), [db2]])
+            grad_norm = np.linalg.norm(flat)
             if grad_norm > self.gradient_clip_norm:
-                gradient = gradient * (self.gradient_clip_norm / grad_norm)
-        return gradient
+                scale = self.gradient_clip_norm / grad_norm
+                return dW1 * scale, db1 * scale, dW2 * scale, db2 * scale
+        return dW1, db1, dW2, db2
 
-    def get_update_gradients(self, doc_ind, doc_weights, feature_matrix):
-        weighted_docs = feature_matrix[doc_ind, :] * doc_weights[:, None]
-        gradients = np.sum(weighted_docs, axis=0)
-        return gradients
+    def _apply_param_update(self, dW1, db1, dW2, db2):
+        dW1, db1, dW2, db2 = self._clip_gradient(dW1, db1, dW2, db2)
 
-    def update_to_gradients(self, gradients):
-        gradients = self._clip_gradient(gradients)
-        self.weights += self.learning_rate * gradients
+        self.W1 += self.learning_rate * dW1
+        self.b1 += self.learning_rate * db1
+        self.W2 += self.learning_rate * dW2
+        self.b2 += self.learning_rate * db2
         self.learning_rate *= self.learning_rate_decay
 
-        ## clip weights
         if self.enable_noise:
-            scale = np.minimum(1, self.sensitivity / np.linalg.norm(self.weights, 2))
-            self.weights = self.weights * scale
+            for param in (self.W1, self.b1, self.W2, self.b2):
+                norm = np.linalg.norm(param)
+                if norm > self.sensitivity:
+                    param *= self.sensitivity / norm
 
+    def get_update_gradients(self, doc_ind, doc_weights, feature_matrix):
+        return (doc_ind, doc_weights, feature_matrix)
+
+    def update_to_gradients(self, gradients):
+        if gradients is None:
+            return
+        doc_ind, doc_weights, feature_matrix = gradients
+        dW1, db1, dW2, db2 = self._compute_param_gradients(
+            doc_ind, doc_weights, feature_matrix)
+        self._apply_param_update(dW1, db1, dW2, db2)
+
+    def _update_to_documents(self, doc_ind, doc_weights, feature_matrix):
+        dW1, db1, dW2, db2 = self._compute_param_gradients(
+            doc_ind, doc_weights, feature_matrix)
+        self._apply_param_update(dW1, db1, dW2, db2)
 
     def federated_averaging_weights(self, feedbacks):
         assert len(feedbacks) > 0
         feedbacks = [(m.gradient, m.parameters, m.n_interactions) for m in feedbacks]
         total_interactions = 0
-        weights = None
+        params = None
         for feedback in feedbacks:
             client_interactions = feedback[2]
-            client_weights = feedback[1]
-            if weights is None:
-                weights = client_interactions * client_weights
+            client_params = feedback[1]
+            if params is None:
+                params = {k: client_interactions * v for k, v in client_params.items()}
             else:
-                weights += client_interactions * client_weights
+                for k in params:
+                    params[k] += client_interactions * client_params[k]
             total_interactions += client_interactions
-        self.weights = weights / total_interactions
-
+        for k in params:
+            params[k] /= total_interactions
+        self.assign_weights(params)
 
     def async_federated_averaging_weights(self, feedback):
-        client_gradient, client_weights, client_n_interactions, client_staleness = feedback
+        _, client_weights, _, client_staleness = feedback
         staleness_weight = 1.0 / (client_staleness + 1.0)
-        self.weights = self.weights * (1 - staleness_weight) + client_weights * staleness_weight
-
-
-    def _update_to_documents(self, doc_ind, doc_weights, feature_matrix):
-        weighted_docs = feature_matrix[doc_ind, :] * doc_weights[:, None]
-        gradients = self._clip_gradient(np.sum(weighted_docs, axis=0))
-
-        self.weights += self.learning_rate * gradients
-        self.learning_rate *= self.learning_rate_decay
-
-        ## clip weights
-        if self.enable_noise:
-            scale = np.minimum(1, self.sensitivity / np.linalg.norm(self.weights, 2))
-            self.weights = self.weights * scale
+        current = self.get_current_weights()
+        for k in current:
+            current[k] = current[k] * (1 - staleness_weight) + client_weights[k] * staleness_weight
+        self.assign_weights(current)
 
     def _calculate_unbias_weights(self, pos_ind, neg_ind, doc_scores, ranking):
         ranking_prob = self._calculate_observed_prob(pos_ind, neg_ind,
@@ -217,13 +210,11 @@ class PDGDLinearRanker(LinearRanker):
 
         results_i = np.arange(n_results)
         pair_i = np.arange(n_pairs)
-        doc_i = np.arange(n_docs)
 
         pos_pair_i = np.tile(pos_ind, n_neg)
         neg_pair_i = np.repeat(neg_ind, n_pos)
 
-        flipped_rankings = np.tile(ranking[None, :],
-                                   [n_pairs, 1])
+        flipped_rankings = np.tile(ranking[None, :], [n_pairs, 1])
         flipped_rankings[pair_i, pos_pair_i] = ranking[neg_pair_i]
         flipped_rankings[pair_i, neg_pair_i] = ranking[pos_pair_i]
 
@@ -234,8 +225,7 @@ class PDGDLinearRanker(LinearRanker):
 
         flipped_log = doc_scores[flipped_rankings]
 
-        safe_log = np.tile(doc_scores[None, None, :],
-                           [n_pairs, n_results, 1])
+        safe_log = np.tile(doc_scores[None, None, :], [n_pairs, n_results, 1])
 
         results_ij = np.tile(results_i[None, 1:], [n_pairs, 1])
         pair_ij = np.tile(pair_i[:, None], [1, n_results - 1])
@@ -267,8 +257,6 @@ class PDGDLinearRanker(LinearRanker):
         n_docs = doc_scores.shape[0]
 
         results_i = np.arange(n_results)
-        # pair_i = np.arange(n_pairs)
-        # doc_i = np.arange(n_docs)
 
         pos_pair_i = np.tile(pos_ind, n_neg)
         neg_pair_i = np.repeat(neg_ind, n_pos)
@@ -278,8 +266,7 @@ class PDGDLinearRanker(LinearRanker):
         range_mask = np.logical_and(min_pair_i[:, None] <= results_i,
                                     max_pair_i[:, None] >= results_i)
 
-        safe_log = np.tile(doc_scores[None, :],
-                           [n_results, 1])
+        safe_log = np.tile(doc_scores[None, :], [n_results, 1])
 
         mask = np.zeros((n_results, n_docs))
         mask[results_i[1:], ranking[:-1]] = True
@@ -306,27 +293,10 @@ class PDGDLinearRanker(LinearRanker):
 
         return safe_pair_prob
 
-    def set_learning_rate(self, learning_rate):
-        self.learning_rate = learning_rate
-
     def set_tau(self, tau):
         self.tau = tau
 
     def update_from_click(self, feature_matrix: np.ndarray, selected_idx: int, max_results: int = 10) -> bool:
-        """
-        Update ranker weights from a single user click interaction.
-
-        Enables continual/online learning: when a user selects an item from a ranked list,
-        that implicit feedback updates the ranker in real-time.
-
-        Args:
-            feature_matrix: Feature matrix for the result set (n_results x n_features)
-            selected_idx: Index of the user-selected result (0-based)
-            max_results: Max results to consider (PDGD internally uses 10)
-
-        Returns:
-            True if update was applied, False if skipped (invalid input or click beyond max_results)
-        """
         n_results = feature_matrix.shape[0]
 
         if n_results == 0 or selected_idx < 0 or selected_idx >= n_results:
@@ -340,8 +310,6 @@ class PDGDLinearRanker(LinearRanker):
 
         scores = self.get_scores(feature_matrix)
 
-        # Compress score range to prevent numerical underflow in PDGD
-        # PDGD normalizes max to 18, so we match that for consistency
         score_min, score_max = scores.min(), scores.max()
         score_range = score_max - score_min
         if score_range > 18:
